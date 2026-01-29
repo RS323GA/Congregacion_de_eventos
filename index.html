@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Auditoría Vial - Precisión Total</title>
+
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
+
+  <style>
+    body { background-color: #1e1e1e; color: #f0f0f0; font-family: sans-serif; padding: 15px; font-size: 0.85rem; }
+    .panel { background: #2b2b2b; border: 1px solid #444; border-radius: 6px; padding: 12px; margin-bottom: 12px; }
+    .form-control, .form-select { background: #333; border: 1px solid #555; color: #fff; font-size: 0.8rem; padding: 4px 8px; }
+    .form-control:focus { background: #444; color: #fff; border-color: #0d6efd; box-shadow: none; }
+    .form-label { margin: 0 0 2px 2px; font-size: 0.7rem; color: #aaa; text-transform: uppercase; }
+
+    #map { height: 450px; width: 100%; border-radius: 6px; border: 1px solid #444; }
+    #miniMap { height: 250px; width: 100%; border-radius: 6px; border: 1px solid #555; }
+
+    .table-container { height: 450px; overflow-y: auto; border: 1px solid #444; border-radius: 6px; }
+    .table { color: #ddd; margin: 0; font-size: 0.8rem; }
+    .table-dark { --bs-table-bg: #2b2b2b; border-bottom: 2px solid #555; position: sticky; top: 0; z-index: 100; }
+    td { vertical-align: middle; padding: 4px 8px; border-color: #444; }
+
+    .zone-text { color: #4fc3f7; font-weight: bold; }
+    .addr-text { color: #bbb; }
+    .coord-text { font-family: monospace; color: #888; }
+
+    .badge-diag { font-size: 0.7rem; padding: 3px 6px; border: 1px solid; background: transparent; }
+    .risk { color: #ff5252; border-color: #ff5252; }
+    .habit { color: #e040fb; border-color: #e040fb; }
+    .temp { color: #40c4ff; border-color: #40c4ff; }
+
+    .btn-gps { font-size: 0.7rem; padding: 2px 8px; margin-top: 3px; border-radius: 10px; background: transparent; border: 1px solid #666; color: #aaa; }
+    .btn-gps:hover { border-color: #fff; color: #fff; }
+
+    .modal-content { background: #2b2b2b; color: #fff; border: 1px solid #555; }
+    .btn-close { filter: invert(1); }
+  </style>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+</head>
+<body>
+
+<div class="container-fluid p-0">
+
+  <div class="panel">
+    <div class="row g-2 align-items-end">
+      <div class="col-md-2 border-end border-secondary pe-3">
+        <label class="form-label text-warning">1. Archivo Excel</label>
+        <input type="file" id="uploadInput" class="form-control" accept=".xlsx, .xls" />
+        <div id="statusMsg" class="small text-muted mt-1 fst-italic">Esperando...</div>
+      </div>
+
+      <div class="col-md-10 ps-3">
+        <div class="row g-2">
+          <div class="col-md-2"> <label class="form-label">Desde</label><input type="date" id="dateStart" class="form-control"> </div>
+          <div class="col-md-2"> <label class="form-label">Hasta</label><input type="date" id="dateEnd" class="form-control"> </div>
+          <div class="col-md-2">
+            <label class="form-label">Diagnóstico</label>
+            <select id="filterDiag" class="form-select">
+              <option value="all">Todos</option>
+              <option value="risk">Riesgo Vía</option>
+              <option value="habit">Mal Hábito</option>
+              <option value="temp">Temporal</option>
+            </select>
+          </div>
+          <div class="col-md-2"> <label class="form-label text-info">Regla</label><select id="filterRule" class="form-select"><option value="all">Todas</option></select> </div>
+          <div class="col-md-2"> <label class="form-label text-info">Placa</label><select id="filterPlate" class="form-select"><option value="all">Todas</option></select> </div>
+          <div class="col-md-2 text-end align-self-center"><span class="badge bg-secondary" id="eventCount">0 Eventos</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="row g-2">
+    <div class="col-lg-5">
+      <div class="panel h-100 p-0 overflow-hidden">
+        <div id="map"></div>
+      </div>
+    </div>
+    <div class="col-lg-7">
+      <div class="table-container">
+        <table class="table table-hover table-sm">
+          <thead class="table-dark">
+            <tr>
+              <th width="50%">Zona / Dirección Real</th>
+              <th class="text-center">Cant.</th>
+              <th class="text-center">Placas</th>
+              <th class="text-center">Días</th>
+              <th>Diagnóstico</th>
+              <th class="text-center">Acción</th>
+            </tr>
+          </thead>
+          <tbody id="tbodyAnalysis"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="modalDetail" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header py-2 border-secondary">
+        <h6 class="modal-title text-info" id="modalTitle">Inspector</h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div id="miniMap"></div>
+        <div class="d-flex justify-content-around px-2 mb-2 border-bottom border-secondary pb-2">
+          <div class="text-center"><h5 class="m-0" id="mTotal">0</h5><small class="text-muted">Eventos</small></div>
+          <div class="text-center"><h5 class="m-0" id="mPlates">0</h5><small class="text-muted">Placas</small></div>
+          <div class="text-center"><h5 class="m-0" id="mDays">0</h5><small class="text-muted">Días</small></div>
+        </div>
+        <div style="max-height: 250px; overflow-y: auto;">
+          <table class="table table-dark table-sm table-striped small mb-0">
+            <thead><tr><th>Fecha</th><th>Placa</th><th>Regla</th></tr></thead>
+            <tbody id="tbodyModal"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+<script>
+  const CLUSTER_RADIUS = 20;
+  let map, miniMap, heatLayer;
+  let rawData = [], currentClusters = [];
+
+  function initMaps() {
+    map = L.map('map').setView([-9.19, -75.01], 5);
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { attribution: '© CARTO' }).addTo(map);
+    miniMap = L.map('miniMap').setView([0,0], 1);
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', { attribution: '© OSM' }).addTo(miniMap);
+  }
+  initMaps();
+
+  document.getElementById('uploadInput').addEventListener('change', handleFile);
+  ['dateStart','dateEnd','filterPlate','filterRule','filterDiag'].forEach(id => document.getElementById(id).addEventListener('change', runAnalysis));
+
+  function handleFile(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    document.getElementById('statusMsg').innerText = "Leyendo...";
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const wb = XLSX.read(new Uint8Array(e.target.result), {type: 'array'});
+        const sheetName = wb.SheetNames.find(n => n.toLowerCase().includes('data')) || wb.SheetNames[0];
+        const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], {header: 1});
+        processData(rows);
+      } catch(err) { alert("Error: " + err.message); }
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
+  function processData(rows) {
+    let hIdx = -1;
+    let col = { lat: -1, lon: -1, plate: -1, rule: -1, loc: -1, date: -1 };
+
+    for(let i=0; i<Math.min(rows.length, 80); i++){
+      const row = (rows[i] || []).map(x => String(x ?? '').trim());
+      if(row.includes('.Device.DeviceName') && row.includes('ExceptionDetailLatitude')) {
+        hIdx = i;
+        col.plate = row.indexOf('.Device.DeviceName');
+        col.lat   = row.indexOf('ExceptionDetailLatitude');
+        col.lon   = row.indexOf('ExceptionDetailLongitude');
+        col.rule  = row.indexOf('.ExceptionRule.ExceptionRuleName');
+        col.loc   = row.indexOf('ExceptionDetailLocation');
+        col.date  = row.indexOf('ExceptionDetailStartTime');
+        break;
+      }
+    }
+
+    if(hIdx === -1) {
+      document.getElementById('statusMsg').innerText = "Falta cabecera.";
+      alert("Error: No encontré la fila con '.Device.DeviceName' y 'ExceptionDetailLatitude'. Revisa si exportaste el Excel correcto.");
+      return;
+    }
+
+    rawData = [];
+    const plates = new Set(), rules = new Set();
+    let minDate = new Date(8640000000000000), maxDate = new Date(-8640000000000000);
+
+    for(let i = hIdx + 1; i < rows.length; i++){
+      const r = rows[i];
+      if(!r || r[col.lat] === undefined || r[col.lon] === undefined) continue;
+
+      const lat = parseFloat(r[col.lat]);
+      const lon = parseFloat(r[col.lon]);
+      if(isNaN(lat) || isNaN(lon)) continue;
+
+      const plate = r[col.plate] || "Desc.";
+      const rule = r[col.rule] || "-";
+
+      let rawLoc = r[col.loc] ? String(r[col.loc]).trim() : "";
+      let zone = "";
+      let addr = rawLoc;
+      if(rawLoc.includes(":")) {
+        const parts = rawLoc.split(":");
+        zone = parts[0].trim();
+        addr = parts.slice(1).join(":").trim();
+      }
+
+      let dateObj = null;
+      let valDate = r[col.date];
+      if(typeof valDate === 'number') dateObj = new Date(Math.round((valDate - 25569)*864e5));
+      else if(valDate) dateObj = new Date(valDate);
+
+      let dk = "S/F", timeStr = String(valDate ?? '');
+      if(dateObj && !isNaN(dateObj)) {
+        dk = dateObj.toISOString().split('T')[0];
+        timeStr = dateObj.toLocaleString();
+        if(dateObj<minDate) minDate=dateObj;
+        if(dateObj>maxDate) maxDate=dateObj;
+      }
+
+      rawData.push({ lat, lon, plate, rule, zone, addr, rawLoc, dateKey: dk, timeStr });
+      plates.add(plate); rules.add(rule);
+    }
+
+    fillSel('filterPlate', plates);
+    fillSel('filterRule', rules);
+
+    if(rawData.length>0 && minDate < maxDate) {
+      document.getElementById('dateStart').value = minDate.toISOString().split('T')[0];
+      document.getElementById('dateEnd').value = maxDate.toISOString().split('T')[0];
+    }
+
+    document.getElementById('statusMsg').innerText = `Listo (${rawData.length} filas)`;
+    document.getElementById('statusMsg').className = "text-success small mt-1 fst-italic";
+
+    runAnalysis();
+  }
+
+  function fillSel(id, set) {
+    const s = document.getElementById(id);
+    s.innerHTML = '<option value="all">Todas</option>';
+    Array.from(set).sort().forEach(v => s.add(new Option(v,v)));
+  }
+
+  function runAnalysis() {
+    if(rawData.length===0) return;
+
+    const fS=document.getElementById('dateStart').value;
+    const fE=document.getElementById('dateEnd').value;
+    const fP=document.getElementById('filterPlate').value;
+    const fR=document.getElementById('filterRule').value;
+    const fD=document.getElementById('filterDiag').value;
+
+    const points = rawData.filter(p => {
+      return (!fS || p.dateKey>=fS) && (!fE || p.dateKey<=fE) &&
+             (fP==='all' || p.plate===fP) && (fR==='all' || p.rule===fR);
+    });
+
+    document.getElementById('eventCount').innerText = points.length + " Ev.";
+
+    currentClusters = makeClusters(points);
+
+    const finals = [];
+    currentClusters.forEach(c => {
+      c.uPlates = new Set(c.events.map(e=>e.plate)).size;
+      c.uDays = new Set(c.events.map(e=>e.dateKey)).size;
+
+      if(c.uDays<=2 && c.events.length>2) { c.dg='temp'; c.dgt='Temporal'; c.dgc='badge-diag temp'; }
+      else if(c.uPlates>=3 && c.uDays>=2) { c.dg='risk'; c.dgt='Riesgo Vía'; c.dgc='badge-diag risk'; }
+      else if(c.uPlates<=2 && c.events.length>2) { c.dg='habit'; c.dgt='Mal Hábito'; c.dgc='badge-diag habit'; }
+      else { c.dg='none'; c.dgt='Sin Patrón'; c.dgc='badge-diag'; }
+
+      if(fD==='all' || c.dg===fD) finals.push(c);
+    });
+
+    renderMap(finals);
+    renderTable(finals);
+  }
+
+  function makeClusters(pts) {
+    const clusters = [];
+    const used = new Array(pts.length).fill(false);
+
+    for(let i=0; i<pts.length; i++){
+      if(used[i]) continue;
+      const c = { lat: pts[i].lat, lon: pts[i].lon, events: [pts[i]] };
+      used[i] = true;
+
+      for(let j=i+1; j<pts.length; j++){
+        if(used[j]) continue;
+        const d = getDist(c.lat, c.lon, pts[j].lat, pts[j].lon);
+        if(d <= CLUSTER_RADIUS) { c.events.push(pts[j]); used[j] = true; }
+      }
+
+      let zC={}, aC={};
+      c.events.forEach(e=>{
+        if(e.zone) zC[e.zone]=(zC[e.zone]||0)+1;
+        if(e.addr) aC[e.addr]=(aC[e.addr]||0)+1;
+      });
+
+      let bZ="", mZ=0; Object.entries(zC).forEach(([k,v])=>{ if(v>mZ){mZ=v; bZ=k} });
+      let bA="", mA=0; Object.entries(aC).forEach(([k,v])=>{ if(v>mA){mA=v; bA=k} });
+
+      c.zone = bZ;
+      c.addr = bA || `${c.lat.toFixed(5)}, ${c.lon.toFixed(5)}`;
+
+      clusters.push(c);
+    }
+
+    return clusters.sort((a,b)=>b.events.length - a.events.length);
+  }
+
+  function getDist(lat1, lon1, lat2, lon2) {
+    const p = 0.017453292519943295;
+    const a = 0.5 - Math.cos((lat2-lat1)*p)/2 + Math.cos(lat1*p)*Math.cos(lat2*p)*(1-Math.cos((lon2-lon1)*p))/2;
+    return 12742000 * Math.asin(Math.sqrt(a));
+  }
+
+  function renderMap(clusters) {
+    if(!map) return;
+    if(heatLayer) map.removeLayer(heatLayer);
+
+    const pts = [];
+    clusters.forEach(c => c.events.forEach(e => pts.push([e.lat, e.lon, 1.0])));
+
+    if(pts.length > 0) {
+      heatLayer = L.heatLayer(pts, {
+        radius: 25,
+        blur: 15,
+        minOpacity: 0.5,
+        gradient: { 0.2:'blue', 0.4:'cyan', 0.6:'lime', 0.8:'yellow', 1.0:'white' }
+      }).addTo(map);
+
+      map.fitBounds(L.latLngBounds(pts.map(p=>[p[0],p[1]])));
+    }
+  }
+
+  function renderTable(clusters) {
+    const tb = document.getElementById('tbodyAnalysis');
+    tb.innerHTML = "";
+
+    clusters.slice(0, 500).forEach((c, idx) => {
+      const domId = `addr-${idx}`;
+      let html = "";
+
+      if(c.zone) {
+        html = `<div class="zone-text">${c.zone}</div><div class="addr-text">${c.addr}</div>`;
+      } else {
+        html = `<div class="coord-text">${c.addr}</div>
+          <button class="btn-gps" onclick="fetchGPS(${c.lat},${c.lon},'${domId}',this)">
+            <i class="bi bi-geo-alt"></i> Buscar Dirección
+          </button>
+          <div id="${domId}" class="fetched-addr"></div>`;
+      }
+
+      const row = `<tr>
+        <td>${html}</td>
+        <td class="text-center fw-bold">${c.events.length}</td>
+        <td class="text-center">${c.uPlates}</td>
+        <td class="text-center">${c.uDays}</td>
+        <td><span class="${c.dgc}">${c.dgt}</span></td>
+        <td class="text-center"><button class="btn btn-sm btn-outline-info p-0 px-2" onclick="openModal(${idx})">🔍</button></td>
+      </tr>`;
+
+      tb.innerHTML += row;
+    });
+
+    window.tempClusters = clusters;
+  }
+
+  window.fetchGPS = function(lat, lon, spanId, btn) {
+    const sp = document.getElementById(spanId);
+    btn.innerHTML = "..."; btn.disabled = true;
+
+    fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=18&addressdetails=1`)
+      .then(r=>r.json())
+      .then(d=>{
+        if(d.address) {
+          const a = d.address;
+          sp.innerText = `📍 ${a.road||""} ${a.house_number||""}, ${a.city||a.town||""}`;
+          btn.style.display='none';
+        } else {
+          sp.innerText="No data"; btn.disabled=false; btn.innerHTML="Reintentar";
+        }
+      })
+      .catch(()=>{
+        sp.innerText="Error consultando dirección";
+        btn.disabled=false; btn.innerHTML="Reintentar";
+      });
+  }
+
+  window.openModal = function(idx) {
+    const c = window.tempClusters[idx];
+
+    document.getElementById('modalTitle').innerText = c.zone || "Detalle";
+    document.getElementById('mTotal').innerText = c.events.length;
+    document.getElementById('mPlates').innerText = c.uPlates;
+    document.getElementById('mDays').innerText = c.uDays;
+
+    const tb = document.getElementById('tbodyModal'); tb.innerHTML="";
+    c.events.sort((a,b)=>a.timeStr>b.timeStr?1:-1).forEach(e=>{
+      tb.innerHTML += `<tr><td>${e.timeStr}</td><td class="text-info">${e.plate}</td><td>${e.rule}</td></tr>`;
+    });
+
+    const el = document.getElementById('modalDetail');
+    new bootstrap.Modal(el).show();
+
+    el.addEventListener('shown.bs.modal', ()=>{
+      miniMap.invalidateSize();
+      miniMap.eachLayer(l=>{ if(!l._url) miniMap.removeLayer(l) });
+      miniMap.setView([c.lat, c.lon], 17);
+      L.circle([c.lat,c.lon],{color:'orange',radius:20}).addTo(miniMap);
+      c.events.forEach(e=>L.circleMarker([e.lat,e.lon],{radius:3,color:'#00e5ff'}).addTo(miniMap));
+    }, {once:true});
+  }
+</script>
+</body>
+</html>
